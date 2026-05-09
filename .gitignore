@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# CDP Toolkit runtime artifacts
+runs/
+certs/

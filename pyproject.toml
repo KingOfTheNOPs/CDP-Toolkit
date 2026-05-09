@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cdptoolkit"
+version = "0.1.0"
+description = "Python CDP toolkit for Chrome/Edge penetration test workflows"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "aiohttp>=3.10",
+  "cryptography>=42.0",
+  "httpx[socks]>=0.27",
+  "python-socks[asyncio]>=2.4",
+  "rich>=13.7",
+  "typer>=0.12",
+  "websockets>=15.0",
+]
+
+[project.scripts]
+cdptk = "cdptoolkit.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cdptoolkit*"]
