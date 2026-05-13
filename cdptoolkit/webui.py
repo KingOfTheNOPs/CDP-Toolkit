@@ -9,8 +9,9 @@ from .log import info
 
 
 HOST_RE = re.compile(
-    r"(?i)\b(?:(?:https?://)?(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})(?::\d{2,5})?(?:/[^\s]*)?)"
+    r"(?i)\b(?:(?:https?://)?(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.[a-z]{2,})(?::\d{2,5})?(?:/[^\s]*)?)"
 )
+ACCOUNT_COUNT_RE = re.compile(r"(?i)^(\d+)\s+accounts?$")
 EXTENSION_ID_RE = re.compile(r"^ID\s*([a-p]{32})$", re.I)
 VERSION_RE = re.compile(r"^\d+(?:\.\d+)+(?:[._-]\d+)?$")
 
@@ -503,7 +504,7 @@ async def collect_password_sites(
     cdp: CDPClient,
     *,
     limit: int,
-    mode: str = "hidden",
+    mode: str = "visible",
 ) -> list[dict[str, Any]]:
     async def action(session) -> list[dict[str, Any]]:
         await _wait_for_true(session, PASSWORD_READY_JS, attempts=20)
@@ -511,6 +512,13 @@ async def collect_password_sites(
         return groups[:limit]
 
     if product_prefix(cdp.endpoint.product) == "edge":
+        raw = await scrape_webui(cdp, password_urls(cdp.endpoint.product), mode=mode)
+        return parse_password_sites(raw, limit)
+
+    try:
+        return await _run_in_webui_model(cdp, password_urls(cdp.endpoint.product), action, mode=mode)
+    except Exception as exc:  # noqa: BLE001 - WebUI DOM fallback.
+        info(f"falling back to generic password WebUI scrape: {exc}")
         raw = await scrape_webui(cdp, password_urls(cdp.endpoint.product), mode=mode)
         return parse_password_sites(raw, limit)
 
@@ -593,14 +601,6 @@ async def collect_bookmarks(
         info(f"falling back to generic bookmarks WebUI scrape: {exc}")
         raw = await scrape_webui(cdp, bookmark_urls(cdp.endpoint.product), mode=mode)
         return parse_bookmarks(raw, text=text, domain=domain, limit=limit)
-
-    try:
-        return await _run_in_webui_model(cdp, password_urls(cdp.endpoint.product), action, mode=mode)
-    except Exception as exc:  # noqa: BLE001 - Edge WebUI fallback.
-        info(f"falling back to generic password WebUI scrape: {exc}")
-        raw = await scrape_webui(cdp, password_urls(cdp.endpoint.product), mode=mode)
-        return parse_password_sites(raw, limit)
-
 
 def parse_history(raw: dict[str, Any], text: str | None, domain: str | None, limit: int) -> list[dict[str, Any]]:
     query = (text or "").lower()
@@ -733,8 +733,13 @@ def parse_password_sites(raw: dict[str, Any], limit: int) -> list[dict[str, Any]
         if site.lower() in seen:
             continue
         username = None
+        entry_count = None
         for neighbor in lines[idx + 1 : min(len(lines), idx + 5)]:
             neighbor_l = neighbor.lower()
+            account_match = ACCOUNT_COUNT_RE.match(neighbor)
+            if account_match:
+                entry_count = int(account_match.group(1))
+                continue
             if (
                 neighbor_l in CONTROL_LINES
                 or neighbor_l.startswith("--")
@@ -746,7 +751,7 @@ def parse_password_sites(raw: dict[str, Any], limit: int) -> list[dict[str, Any]
                 username = neighbor
                 break
         seen.add(site.lower())
-        out.append({"site": site, "username": username, "source_url": raw.get("url")})
+        out.append({"site": site, "username": username, "entry_count": entry_count, "source_url": raw.get("url")})
         if len(out) >= limit:
             break
     return out

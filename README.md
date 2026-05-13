@@ -96,18 +96,30 @@ Lists saved-password site metadata through the browser's password manager WebUI.
 
 This command inventories saved-password metadata. It does not decrypt passwords directly and does not read the `Login Data` database.
 
+> [!WARNING]
+> `saved-passwords list` opens the browser password-manager/settings WebUI through CDP. Edge only populates saved-password rows in a visible target in current testing, so Edge is restricted to `--mode visible`. Chrome works with `--mode visible`, `--mode background`, and `--mode hidden`.
+
 ```powershell
 cdptk saved-passwords list --cdp-endpoint http://127.0.0.1:9222 --out saved-password-sites.json
 ```
 
 ### `saved-passwords dump`
 
-Attempts an autofill-backed password recovery workflow against a real origin. The command creates a target, navigates to the origin, uses either an injected controlled login form or provided selectors, triggers browser autofill with user-like input, and reads the resulting field values through CDP.
+Attempts an autofill-backed password recovery workflow against a real origin. The command creates a real browser window, optionally parks it offscreen, enables focus emulation, uses either the page's login form or an injected controlled form, triggers browser password autofill with CDP input events, and reads the resulting field values through CDP.
 
-This depends on browser state. Autofill behavior can vary based on visibility, user gesture requirements, password manager settings, enterprise policy, origin matching, and whether the browser is willing to fill the form.
+Start with the real saved login URL and `--no-inject-form`. The saved-password realm and login URL have to match closely. Prefer the exact URL Chrome shows for the saved site, such as `http://test.local/`; a different path, host, or port can prevent the popup from offering the credential even when a similar page is served. `--inject-form` is still useful when the page markup fights autofill, but current testing shows the real page is the better first attempt.
+
+The popup selection path is deliberately simple: click a credential field, wait for Chromium's saved-password popup, send `ArrowDown` and `Enter` through CDP keyboard events, then read the field values. It tries the username field first, then the password field if needed. The popup is browser UI, so the tool avoids coordinate-clicking the black popup row. Tune `--popup-open-ms` if a slow site needs more time before the keyboard selection.
+
+> [!WARNING]
+> `saved-passwords dump` defaults to `--mode visible` because Chromium's browser-side password popup is native browser UI. `--mode offscreen` parks the window at negative coordinates; Edge handled that in testing, but Chrome may fail if its saved-password popup cannot anchor to the offscreen native window.
+
+By default, the command prints a compact JSON result with the recovered values and the attempt that worked. Use `--full` when you need the diagnostic window bounds, field geometry, and per-attempt details.
 
 ```powershell
-cdptk saved-passwords dump https://example.com --cdp-endpoint http://127.0.0.1:9222 --mode visible --out autofill.json
+cdptk saved-passwords dump http://test.local/ --cdp-endpoint http://127.0.0.1:9222 --no-inject-form --out autofill.json
+cdptk saved-passwords dump https://example.com/login --cdp-endpoint http://127.0.0.1:9222 --mode visible --popup-open-ms 1200 --out autofill.json
+cdptk saved-passwords dump https://example.com/login --cdp-endpoint http://127.0.0.1:9222 --full --out autofill-debug.json
 cdptk saved-passwords dump https://example.com --cdp-endpoint http://127.0.0.1:9222 --no-inject-form --username-selector "#user" --password-selector "#pass"
 ```
 
@@ -197,7 +209,6 @@ Modes:
 | Mode | What it does |
 | --- | --- |
 | `offscreen` | Creates a dedicated window and moves it off-screen before screencasting it. |
-| `foreground` | Creates a visible window, useful for troubleshooting. |
 | `background` | Creates a background tab in the current browser window. |
 
 ### `browser-takeover proxy`
@@ -211,6 +222,9 @@ cdptk browser-takeover proxy `
   --cdp-endpoint http://127.0.0.1:9222 `
   --listen 127.0.0.1:8080 `
   --cert-dir runs/proxy/certs `
+  --mode hidden `
+  --resource-strategy safe `
+  --download-policy deny `
   -v
 ```
 
@@ -227,8 +241,9 @@ What the proxy does:
 - Uses victim Chrome to perform upstream document requests.
 - Preserves victim Chrome cookies and user agent where CDP exposes them.
 - Strips blocking CSP/CORS/framing headers to improve operator-side renderability.
-- Uses `Network.loadNetworkResource` for GET/HEAD subresources such as fonts, scripts, styles, images, and download-prone extensions so those bytes stream back to the operator instead of causing victim-side downloads.
-- Denies hidden-tab browser downloads by default with `--deny-downloads`.
+- `--mode hidden` uses hidden CDP fetch targets when supported. Use `--mode background` when hidden targets are unsupported or you want visible browser tabs for troubleshooting.
+- `--resource-strategy safe` uses `Network.loadNetworkResource` for GET/HEAD subresources such as fonts, scripts, styles, images, and download-prone extensions so those bytes stream back to the operator instead of causing victim-side downloads. Use `--resource-strategy navigate` to force the older navigate-everything behavior.
+- `--download-policy deny` asks each CDP fetch target to deny browser downloads while proxying. Use `--download-policy allow` when you intentionally want browser-managed downloads.
 - Retries top-level GET/HEAD attachment navigations that abort with `net::ERR_ABORTED` using a same-origin `Runtime.evaluate(fetch(..., credentials: "include"))` fallback so the operator browser can receive the file.
 
 Proxy mode is useful for targeted request/response workflows and for browsing from the victim browser's network position. It is less faithful than screencast mode for complex portals because the operator browser renders and executes JavaScript locally while victim Chrome performs upstream fetches.

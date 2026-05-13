@@ -64,8 +64,8 @@ class RemoteBrowserServer:
         self._started_at = time.time()
 
     async def start(self) -> None:
-        if self.options.mode not in {"offscreen", "foreground", "background"}:
-            raise ValueError("--mode must be offscreen, foreground, or background")
+        if self.options.mode not in {"offscreen", "background"}:
+            raise ValueError("--mode must be offscreen or background")
 
         self.cdp = await CDPClient.connect(self.options.cdp_endpoint, self.options.socks)
         await self._create_target()
@@ -124,18 +124,17 @@ class RemoteBrowserServer:
         params: dict[str, Any] = {"url": "about:blank"}
         if self.browser_context_id:
             params["browserContextId"] = self.browser_context_id
-        if self.options.mode in {"offscreen", "foreground"}:
+        if self.options.mode == "offscreen":
             params.update(
                 {
                     "newWindow": True,
                     "width": self.options.width,
                     "height": self.options.height,
-                    "background": self.options.mode == "offscreen",
+                    "background": True,
                 }
             )
-            if self.options.mode == "offscreen":
-                params["left"] = self.options.offscreen_left
-                params["top"] = self.options.offscreen_top
+            params["left"] = self.options.offscreen_left
+            params["top"] = self.options.offscreen_top
         elif self.options.mode == "background":
             params["background"] = True
 
@@ -144,7 +143,7 @@ class RemoteBrowserServer:
         self.target_id = result["targetId"]
         self.session = await self.cdp.attach(self.target_id)
 
-        if self.options.mode in {"offscreen", "foreground"}:
+        if self.options.mode == "offscreen":
             with contextlib.suppress(Exception):
                 window = await self.cdp.send("Browser.getWindowForTarget", {"targetId": self.target_id})
                 self.window_id = int(window["windowId"])
@@ -153,9 +152,8 @@ class RemoteBrowserServer:
                     "height": self.options.height,
                     "windowState": "normal",
                 }
-                if self.options.mode == "offscreen":
-                    bounds["left"] = self.options.offscreen_left
-                    bounds["top"] = self.options.offscreen_top
+                bounds["left"] = self.options.offscreen_left
+                bounds["top"] = self.options.offscreen_top
                 await self.cdp.send("Browser.setWindowBounds", {"windowId": self.window_id, "bounds": bounds})
 
     async def _enable_target(self) -> None:
@@ -176,9 +174,6 @@ class RemoteBrowserServer:
                     "screenHeight": self.options.height,
                 },
             )
-        if self.options.mode == "foreground":
-            with contextlib.suppress(Exception):
-                await self.session.send("Page.bringToFront")
         await self.session.send("Page.navigate", {"url": normalize_url(self.options.start_url)})
         await self.session.send(
             "Page.startScreencast",
