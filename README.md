@@ -22,6 +22,7 @@ cdptk bookmarks list --cdp-endpoint http://127.0.0.1:9222 --out bookmarks.json
 cdptk history search azure --cdp-endpoint http://127.0.0.1:9222 --limit 50
 cdptk saved-passwords list --cdp-endpoint http://127.0.0.1:9222
 cdptk extensions list --cdp-endpoint http://127.0.0.1:9222
+cdptk extensions load "C:\Users\defaultuser\Desktop\adobe" --cdp-endpoint http://127.0.0.1:9222
 ```
 
 ## Features
@@ -131,6 +132,17 @@ The output can include names, extension IDs, enabled state, descriptions, views/
 
 ```powershell
 cdptk extensions list --cdp-endpoint http://127.0.0.1:9222 --out extensions.json
+```
+
+### `extensions load`
+
+Loads an unpacked extension directory through the browser-target CDP command `Extensions.loadUnpacked`. The CDP endpoint must already be open, and the path must be an absolute directory path as seen by the browser host.
+
+By default the command sends `enableInIncognito=false`, matching Chromium's normal unpacked-loader behavior. Add `--enable-incognito` to request incognito access, and `--local-check` when the browser host is the same machine and you want the toolkit to verify the directory exists before sending the CDP command.
+
+```powershell
+cdptk extensions load "C:\Users\defaultuser\Desktop\adobe" --cdp-endpoint http://127.0.0.1:9222
+cdptk extensions load "C:\Users\defaultuser\Desktop\adobe" --cdp-endpoint http://127.0.0.1:9222 --out loaded-extension.json
 ```
 
 ### `page new`
