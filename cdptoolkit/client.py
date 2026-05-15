@@ -77,6 +77,12 @@ class CDPClient:
         info("attached session {}", result["sessionId"])
         return TargetSession(self, target_id, result["sessionId"])
 
+    async def attach_browser_target(self) -> TargetSession:
+        info("attaching to browser target")
+        result = await self.send("Target.attachToBrowserTarget")
+        info("attached browser session {}", result["sessionId"])
+        return TargetSession(self, "browser", result["sessionId"])
+
     async def detach(self, session: TargetSession) -> None:
         info("detaching session {}", session.session_id)
         await self.send("Target.detachFromTarget", {"sessionId": session.session_id})
@@ -143,6 +149,17 @@ class CDPClient:
             params["browserContextId"] = browser_context_id
         info("setting {} cookies{}", len(cookies), f" in context {browser_context_id}" if browser_context_id else "")
         await self.send("Storage.setCookies", params)
+
+    async def load_unpacked_extension(self, path: str, *, enable_in_incognito: bool = False) -> dict:
+        session = await self.attach_browser_target()
+        try:
+            info("loading unpacked extension from {}", path)
+            return await session.send(
+                "Extensions.loadUnpacked",
+                {"path": path, "enableInIncognito": enable_in_incognito},
+            )
+        finally:
+            await self.detach(session)
 
     async def screenshot(self, target_id: str, out: Path, *, full: bool = False) -> Path:
         session = await self.attach(target_id)

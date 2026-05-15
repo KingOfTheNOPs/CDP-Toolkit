@@ -39,7 +39,7 @@ app.add_typer(cookies_app, name="cookies", help="Collect and export browser cook
 app.add_typer(bookmarks_app, name="bookmarks", help="Collect browser bookmarks/favorites through CDP-rendered WebUI.")
 app.add_typer(history_app, name="history", help="Search browser history through CDP-rendered browser WebUI.")
 app.add_typer(saved_passwords_app, name="saved-passwords", help="List saved-password sites and dump autofill-backed entries through CDP.")
-app.add_typer(extensions_app, name="extensions", help="Inventory extensions through CDP-rendered browser WebUI.")
+app.add_typer(extensions_app, name="extensions", help="Inventory and load extensions through CDP.")
 app.add_typer(contexts_app, name="contexts", help="List and dispose non-default browser contexts.")
 app.add_typer(browser_takeover_app, name="browser-takeover", help="Browse through the CDP-attached browser using screencast or proxy mode.")
 
@@ -1014,3 +1014,33 @@ def extensions_list(
     data = run(_run())
     dump_json(data, out)
     console.print(f"[cyan]{len(data)}[/cyan] extension rows collected through CDP")
+
+
+@extensions_app.command("load")
+def extensions_load(
+    extension_path: str = typer.Argument(..., help="Absolute unpacked extension directory path on the browser host."),
+    cdp_endpoint: str = REQUIRED_CDP_ENDPOINT,
+    socks: Optional[str] = typer.Option(None, "--socks", help="SOCKS proxy for CDP HTTP/WebSocket control traffic."),
+    enable_incognito: bool = typer.Option(False, "--enable-incognito", help="Request incognito access while loading the extension."),
+    local_check: bool = typer.Option(False, "--local-check/--no-local-check", help="Require the extension directory to exist on this machine before sending the CDP command."),
+    out: Optional[Path] = typer.Option(None, "--out", "-o"),
+) -> None:
+    """Load an unpacked extension through Extensions.loadUnpacked."""
+
+    if local_check and not Path(extension_path).is_dir():
+        raise typer.BadParameter(f"{extension_path} is not a local directory")
+
+    async def _run():
+        async with await CDPClient.connect(cdp_endpoint, socks) as cdp:
+            result = await cdp.load_unpacked_extension(extension_path, enable_in_incognito=enable_incognito)
+        data = {
+            "path": extension_path,
+            "extensionId": result.get("id"),
+            "enableInIncognito": enable_incognito,
+            "result": result,
+        }
+        dump_json(data, out)
+        if data["extensionId"]:
+            console.print(f"[green]loaded[/green] extension {data['extensionId']}")
+
+    run(_run())
