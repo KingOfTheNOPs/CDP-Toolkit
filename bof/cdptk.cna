@@ -91,7 +91,7 @@ alias("cdptk-eval-file", &run_cdptk_eval_file);
 beacon_command_register(
     "cdptk",
     "Run one-shot Chrome DevTools Protocol operations.",
-    "Usage: cdptk <discover|tabs|screenshot|cookies|page-new|page-close|contexts|context-dispose|snapshot|extensions-load|bookmarks|history|saved-passwords|extensions|eval|servicenow-gck> [port] [arg1] [arg2] [flags]"
+    "Usage: cdptk <discover|tabs|screenshot|cookies|page-new|page-close|contexts|context-dispose|snapshot|extensions-load|bookmarks|history|saved-passwords|extensions|eval> [port] [arg1] [arg2] [flags]"
 );
 
 beacon_command_register(

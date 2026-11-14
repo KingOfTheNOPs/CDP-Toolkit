@@ -108,6 +108,16 @@ static int s_n_eq(const char* a, const char* b, SIZE_T n) {
   return 1;
 }
 
+static char ascii_lower(char c) {
+  return c >= 'A' && c <= 'Z' ? (char)(c + ('a' - 'A')) : c;
+}
+
+static int s_n_ieq(const char* a, const char* b, SIZE_T n) {
+  for (SIZE_T i = 0; i < n; i++)
+    if (ascii_lower(a[i]) != ascii_lower(b[i])) return 0;
+  return 1;
+}
+
 static const char* s_find_range(const char* p, const char* end, const char* needle) {
   SIZE_T n = s_len(needle);
   if (!n) return p;
@@ -666,8 +676,106 @@ static int operation_context_dispose(INTERNET_PORT port, const char* id) {
   buf_free(&params); return ok;
 }
 
-static int operation_cookies(INTERNET_PORT port) {
-  return operation_simple_browser(port, "Storage.getCookies", "{}");
+static int valid_host_filter(const char* filter) {
+  if (!filter || !*filter || s_len(filter) > 253) return 0;
+  const char* p = filter;
+  if (p[0] == '*' && p[1] == '.') p += 2;
+  else if (*p == '.') p++;
+  if (!*p) return 0;
+  for (; *p; p++) {
+    char c = *p;
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '-' || c == '.')) return 0;
+  }
+  return p[-1] != '.';
+}
+
+static int cookie_domain_matches(const char* domain, const char* filter) {
+  while (domain && *domain == '.') domain++;
+  if (filter && filter[0] == '*' && filter[1] == '.') filter += 2;
+  else while (filter && *filter == '.') filter++;
+  SIZE_T domain_len = s_len(domain), filter_len = s_len(filter);
+  if (!filter_len || domain_len < filter_len) return 0;
+  const char* suffix = domain + domain_len - filter_len;
+  if (!s_n_ieq(suffix, filter, filter_len)) return 0;
+  return domain_len == filter_len || suffix[-1] == '.';
+}
+
+static int filter_cookie_response(const BUF* response, const char* filter, BUF* output,
+                                  unsigned int* matched) {
+  const char* end = response->data + response->len;
+  const char* key = s_find_range(response->data, end, "\"cookies\"");
+  if (!key) return 0;
+  const char* p = key + 9;
+  while (p < end && *p != '[') p++;
+  if (p == end) return 0;
+
+  int ok = buf_append(output, "{\"result\":{\"cookies\":[", CDPTK_MAX_HTTP);
+  int depth = 0, in_string = 0, escape = 0, first = 1;
+  const char* object = 0;
+  *matched = 0;
+  for (p++; ok && p < end; p++) {
+    char c = *p;
+    if (in_string) {
+      if (escape) escape = 0;
+      else if (c == '\\') escape = 1;
+      else if (c == '"') in_string = 0;
+      continue;
+    }
+    if (c == '"') { in_string = 1; continue; }
+    if (c == '{') {
+      if (depth == 0) object = p;
+      depth++;
+    } else if (c == '}') {
+      if (depth < 1) return 0;
+      depth--;
+      if (depth == 0 && object) {
+        char domain[512] = {0};
+        if (json_get_string_range(object, p + 1, "domain", domain, sizeof(domain)) &&
+            cookie_domain_matches(domain, filter)) {
+          if (!first) ok = buf_append(output, ",", CDPTK_MAX_HTTP);
+          if (ok) ok = buf_append_n(output, object, (DWORD)(p + 1 - object), CDPTK_MAX_HTTP);
+          if (ok) { first = 0; (*matched)++; }
+        }
+        object = 0;
+      }
+    } else if (c == ']' && depth == 0) {
+      break;
+    }
+  }
+  if (!ok || depth != 0 || p >= end) return 0;
+  ok = buf_append(output, "],\"hostFilter\":", CDPTK_MAX_HTTP) &&
+       buf_append_json_string(output, filter, CDPTK_MAX_HTTP) &&
+       buf_append(output, ",\"matched\":", CDPTK_MAX_HTTP) &&
+       buf_append_uint(output, *matched, CDPTK_MAX_HTTP) &&
+       buf_append(output, "}}", CDPTK_MAX_HTTP);
+  return ok;
+}
+
+static int operation_cookies(INTERNET_PORT port, const char* arg1, const char* arg2) {
+  const char* filter = s_eq(arg1, "--host") ? arg2 : arg1;
+  if (!filter || !*filter)
+    return operation_simple_browser(port, "Storage.getCookies", "{}");
+  if (!valid_host_filter(filter)) {
+    out_error("cookie host filter must be a hostname or leading wildcard such as *.service-now.com");
+    return 0;
+  }
+
+  BUF response = {0}, filtered = {0};
+  unsigned int matched = 0;
+  int ok = with_browser_command(port, "Storage.getCookies", "{}", 0, &response) &&
+           !cdp_error(&response);
+  if (!ok) {
+    out_error("cookie collection failed");
+  } else if (!filter_cookie_response(&response, filter, &filtered, &matched)) {
+    out_error("cookie response parsing failed");
+    ok = 0;
+  } else {
+    ok = out_artifact("cdptk-cookies.json", (BYTE*)filtered.data, filtered.len);
+  }
+  buf_free(&filtered);
+  buf_free(&response);
+  return ok;
 }
 
 static int operation_snapshot(INTERNET_PORT port, const char* selector, const char* kind) {
@@ -763,46 +871,6 @@ static int evaluate(CDP* page, const char* expression, BUF* response) {
                       CDPTK_MAX_HTTP) &&
            cdp_send(page, "Runtime.evaluate", params.data, 0, response);
   buf_free(&params); return ok;
-}
-
-static int operation_servicenow_gck(INTERNET_PORT port, const char* selector) {
-  const char* target_selector = selector && *selector ? selector : "service-now.com";
-  TARGET target;
-  bytes_zero(&target, sizeof(target));
-  if (!resolve_target(port, target_selector, &target) || !target.ws[0]) {
-    out_error("ServiceNow target not found");
-    return 0;
-  }
-  const char* url_end = target.url + s_len(target.url);
-  if (!s_contains_range(target.url, url_end, ".service-now.com/")) {
-    out_error("target is not a service-now.com page");
-    return 0;
-  }
-  CDP page;
-  BUF response = {0};
-  bytes_zero(&page, sizeof(page));
-  if (!cdp_open(&page, port, target.ws)) {
-    out_error("ServiceNow target WebSocket connection failed");
-    return 0;
-  }
-  const char* expression =
-      "(()=>{const v=globalThis.g_ck;return{url:location.href,origin:location.origin,"
-      "g_ck:typeof v==='string'?v:''}})()";
-  int ok = evaluate(&page, expression, &response) && !cdp_error(&response);
-  if (ok && s_contains_range(response.data, response.data + response.len, "\"g_ck\":\"\"")) {
-    out_error("window.g_ck was empty or unavailable");
-    ok = 0;
-  }
-  if (ok) {
-    ok = out_artifact("cdptk-servicenow-gck.json", (BYTE*)response.data, response.len);
-  } else if (response.data && cdp_error(&response)) {
-    out_text(response.data);
-  } else if (!response.data) {
-    out_error("ServiceNow g_ck evaluation failed");
-  }
-  buf_free(&response);
-  cdp_close(&page);
-  return ok;
 }
 
 static int operation_eval(INTERNET_PORT port, const char* selector, const char* expression) {
@@ -918,7 +986,7 @@ static int dispatch(const char* command, INTERNET_PORT port, const char* arg1, c
   if (s_eq(command, "discover")) return operation_discover(port);
   if (s_eq(command, "tabs")) return operation_tabs(port);
   if (s_eq(command, "screenshot")) return operation_screenshot(port, arg1, flags & 1);
-  if (s_eq(command, "cookies")) return operation_cookies(port);
+  if (s_eq(command, "cookies")) return operation_cookies(port, arg1, arg2);
   if (s_eq(command, "page-new")) return operation_page_new(port, arg1, arg2);
   if (s_eq(command, "page-close")) return operation_page_close(port, arg1);
   if (s_eq(command, "contexts")) return operation_simple_browser(port, "Target.getBrowserContexts", "{}");
@@ -926,7 +994,6 @@ static int dispatch(const char* command, INTERNET_PORT port, const char* arg1, c
   if (s_eq(command, "snapshot")) return operation_snapshot(port, arg1, arg2);
   if (s_eq(command, "extensions-load")) return operation_extensions_load(port, arg1, flags & 1);
   if (s_eq(command, "eval")) return operation_eval(port, arg1, arg2);
-  if (s_eq(command, "servicenow-gck")) return operation_servicenow_gck(port, arg1);
   if (s_eq(command, "bookmarks") || s_eq(command, "history") ||
       s_eq(command, "saved-passwords") || s_eq(command, "extensions"))
     return operation_webui(port, command, arg1);
