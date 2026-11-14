@@ -18,7 +18,7 @@ The Aggressor command is:
 cdptk <command> [port] [arg1] [arg2] [flags]
 ```
 
-Supported commands are `discover`, `tabs`, `screenshot`, `cookies`, `page-new`, `page-close`, `contexts`, `context-dispose`, `snapshot`, `extensions-load`, `bookmarks`, `history`, `saved-passwords`, `extensions`, and `servicenow-gck`.
+Supported commands are `discover`, `tabs`, `screenshot`, `cookies`, `page-new`, `page-close`, `contexts`, `context-dispose`, `snapshot`, `extensions-load`, `bookmarks`, `history`, `saved-passwords`, `extensions`, `eval`, and `servicenow-gck`.
 
 For `screenshot`, `arg1` selects a page by one-based index, target ID prefix, title, or URL text. Set `flags=1` for a full-page capture. For `page-new`, `arg1` is the URL and `arg2` is `visible`, `background`, `hidden`, or `isolated`. For `snapshot`, `arg1` is the target selector and `arg2` is `ax` or `dom`. For `extensions-load`, `arg1` is the absolute directory path and `flags=1` enables incognito access.
 
@@ -29,6 +29,14 @@ cdptk page-new 9335 https://example.service-now.com/ background
 cdptk servicenow-gck 9335 <targetId returned by page-new>
 cdptk page-close 9335 <targetId>
 ```
+
+For generic JavaScript evaluation, use the file-oriented Aggressor command:
+
+```text
+cdptk-eval-file <port> <exact-target-id> <local-js-file>
+```
+
+The CNA reads the JavaScript locally and sends its contents in the packed BOF arguments; the target does not read or create a script file. The script is limited to 65535 bytes, the complete target ID is required to avoid evaluating in an unintended page, and the CDP response is downloaded as `cdptk-eval.json`. `Runtime.evaluate` uses `awaitPromise`, `returnByValue`, and `userGesture`. Protocol errors and JavaScript exception details are downloaded rather than printed to the Beacon console.
 
 Screenshot, snapshot, and WebUI collector results are returned with `BeaconDownload`; other JSON results are emitted as UTF-8 output. No target-side output files are created by the BOF.
 

