@@ -764,6 +764,46 @@ static int evaluate(CDP* page, const char* expression, BUF* response) {
   buf_free(&params); return ok;
 }
 
+static int operation_servicenow_gck(INTERNET_PORT port, const char* selector) {
+  const char* target_selector = selector && *selector ? selector : "service-now.com";
+  TARGET target;
+  bytes_zero(&target, sizeof(target));
+  if (!resolve_target(port, target_selector, &target) || !target.ws[0]) {
+    out_error("ServiceNow target not found");
+    return 0;
+  }
+  const char* url_end = target.url + s_len(target.url);
+  if (!s_contains_range(target.url, url_end, ".service-now.com/")) {
+    out_error("target is not a service-now.com page");
+    return 0;
+  }
+  CDP page;
+  BUF response = {0};
+  bytes_zero(&page, sizeof(page));
+  if (!cdp_open(&page, port, target.ws)) {
+    out_error("ServiceNow target WebSocket connection failed");
+    return 0;
+  }
+  const char* expression =
+      "(()=>{const v=globalThis.g_ck;return{url:location.href,origin:location.origin,"
+      "g_ck:typeof v==='string'?v:''}})()";
+  int ok = evaluate(&page, expression, &response) && !cdp_error(&response);
+  if (ok && s_contains_range(response.data, response.data + response.len, "\"g_ck\":\"\"")) {
+    out_error("window.g_ck was empty or unavailable");
+    ok = 0;
+  }
+  if (ok) {
+    ok = out_artifact("cdptk-servicenow-gck.json", (BYTE*)response.data, response.len);
+  } else if (response.data && cdp_error(&response)) {
+    out_text(response.data);
+  } else if (!response.data) {
+    out_error("ServiceNow g_ck evaluation failed");
+  }
+  buf_free(&response);
+  cdp_close(&page);
+  return ok;
+}
+
 static int operation_webui(INTERNET_PORT port, const char* kind, const char* query) {
   CDP browser, page; BUF version = {0}, create = {0}, params = {0}, response = {0};
   bytes_zero(&browser, sizeof(browser));
@@ -838,6 +878,7 @@ static int dispatch(const char* command, INTERNET_PORT port, const char* arg1, c
   if (s_eq(command, "context-dispose")) return operation_context_dispose(port, arg1);
   if (s_eq(command, "snapshot")) return operation_snapshot(port, arg1, arg2);
   if (s_eq(command, "extensions-load")) return operation_extensions_load(port, arg1, flags & 1);
+  if (s_eq(command, "servicenow-gck")) return operation_servicenow_gck(port, arg1);
   if (s_eq(command, "bookmarks") || s_eq(command, "history") ||
       s_eq(command, "saved-passwords") || s_eq(command, "extensions"))
     return operation_webui(port, command, arg1);

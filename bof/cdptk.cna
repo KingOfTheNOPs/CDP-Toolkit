@@ -46,5 +46,5 @@ alias("cdptk", &run_cdptk);
 beacon_command_register(
     "cdptk",
     "Run one-shot Chrome DevTools Protocol operations.",
-    "Usage: cdptk <discover|tabs|screenshot|cookies|page-new|page-close|contexts|context-dispose|snapshot|extensions-load|bookmarks|history|saved-passwords|extensions> [port] [arg1] [arg2] [flags]"
+    "Usage: cdptk <discover|tabs|screenshot|cookies|page-new|page-close|contexts|context-dispose|snapshot|extensions-load|bookmarks|history|saved-passwords|extensions|servicenow-gck> [port] [arg1] [arg2] [flags]"
 );
